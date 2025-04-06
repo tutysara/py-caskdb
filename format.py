@@ -40,6 +40,27 @@ import struct
 HEADER_FORMAT = "<LLL" #little endian, long unsigned int (4 bytes)
 HEADER_SIZE = 12 # 4+4+4
 
+
+class KeyEntry:
+    """
+    KeyEntry keeps the metadata about the KV, specially the position of
+    the byte offset in the file. Whenever we insert/update a key, we create a new
+    KeyEntry object and insert that into KeyDir.
+
+    Args:
+        timestamp (int): Timestamp at which we wrote the KV pair to the disk. The value
+            is current time in seconds since the epoch.
+        position (int): The position is the byte offset in the file where the data
+            exists
+        total_size(int): Total size of bytes of the value. We use this value to know
+            how many bytes we need to read from the file
+    """
+
+    def __init__(self, timestamp: int, position: int, total_size: int):
+        self.timestamp: int = timestamp
+        self.position: int = position
+        self.total_size: int = total_size
+
 def encode_header(timestamp: int, key_size: int, value_size: int) -> bytes:
     return struct.pack(HEADER_FORMAT, timestamp, key_size, value_size)
     
