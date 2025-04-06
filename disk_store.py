@@ -23,7 +23,7 @@ import os.path
 import time
 import typing
 
-from format import encode_kv, decode_kv, decode_header
+from format import HEADER_SIZE, KeyEntry, encode_kv, decode_kv, decode_header
 
 
 # DiskStorage is a Log-Structured Hash Table as described in the BitCask paper. We
@@ -64,16 +64,81 @@ class DiskStorage:
     """
 
     def __init__(self, file_name: str = "data.db"):
-        raise NotImplementedError
+        self.file_name = file_name
+        self.key_dir = {}
+        # keep tab of where to write next
+        # while reading we seek to different pos in file
+        # so, always move to write_position before writing
+        # TODO: Check if this is performant or keeping a hashmap as cache is required
+        self.write_position = 0
+        # if we have an existing file, read from it
+        if os.path.exists(file_name):
+            self._init_key_dir()
+
+        # keep an open file object derived from file_name
+        self.file = open(self.file_name, 'a+b') # append + write mode
+
+        
+    
+    def _init_key_dir(self): # lifted from hit docs
+        # in original paper the path is a dir and we have to read all files from it
+        # TODO: change it to confirm with spec in paper
+        print("****----------initialising the database----------****")
+        with open(self.file_name, "rb") as f:
+            while header_bytes := f.read(HEADER_SIZE):
+                timestamp, key_size, value_size = decode_header(data=header_bytes)
+                key_bytes = f.read(key_size)
+                value_bytes = f.read(value_size)
+                key = key_bytes.decode("utf-8")
+                value = value_bytes.decode("utf-8")
+                total_size = HEADER_SIZE + key_size + value_size
+                kv = KeyEntry(
+                    timestamp=timestamp,
+                    position=self.write_position,
+                    total_size=total_size,
+                )
+                self.key_dir[key] = kv
+                self.write_position += total_size
+                print(f"loaded k={key}, v={value}")
+        print("****----------initialisation complete----------****")
+
+    def _write(self, data:bytes):
+        # writing to file is hard?
+        # TODO: read about https://danluu.com/file-consistency/
+        self.file.write(data)
+        #TODO:read more about fsync: https://docs.python.org/3/library/os.html#os.fsync
+        self.file.flush()
+        os.fsync(self.file.fileno())
 
     def set(self, key: str, value: str) -> None:
-        raise NotImplementedError
+        # convert key and value into encoded form (bytes)
+        # write to disk and move the write pointer
+        # keep an entry in key_dir mapping key->KeyEntry (position, totalsize)
+        # use the key in key_dir to read value directly from disk
+        timestamp = int(time.time())
+        size, data = encode_kv(timestamp=timestamp, key=key, value=value)
+        self._write(data)
+        kv = KeyEntry(timestamp=timestamp, position=self.write_position, total_size=size)
+        self.key_dir[key] = kv
+        # update after saving the starting position
+        self.write_position += size
 
     def get(self, key: str) -> str:
-        raise NotImplementedError
+        kv:KeyEntry = self.key_dir.get(key)
+        if kv is None:
+            return "" # can we return None instead?
+        self.file.seek(kv.position, os.SEEK_SET) # meaning seek from start of stream (0)
+        data = self.file.read(kv.total_size)
+        timestamp, key, value = decode_kv(data)
+        return value
 
-    def close(self) -> None:
-        raise NotImplementedError
+    def close(self) -> None: # lifted from hint doc
+        # before we close the file, we need to safely write the contents in the buffers
+        # to the disk. Check documentation of DiskStorage._write() to understand
+        # following the operations
+        self.file.flush()
+        os.fsync(self.file.fileno())
+        self.file.close()
 
     def __setitem__(self, key: str, value: str) -> None:
         return self.set(key, value)
